@@ -1,0 +1,13 @@
+[package]
+name = "probemeister"
+version = "0.0.1"
+authors = ["Daniel Egger <daniel@eggers-club.com>"]
+edition = "2018"
+
+[dependencies]
+libusb = "0.3.0"
+probe = { path = "../probe-rs/probe" }
+stlink = { path = "../probe-rs/probe/stlink" }
+coresight = { path = "../probe-rs/coresight" }
+structopt = "0.2.14"
+rustyline = "3.0.0"
