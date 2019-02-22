@@ -23,7 +23,7 @@ fn repl(rl: &mut rustyline::Editor<()>, probe: &mut Option<impl DebugProbe>) -> 
 
     let readline = rl.readline(&format!(
         "{} >> ",
-        probe.as_ref().map_or("(Not connected)", |_| ("Connected"))
+        probe.as_ref().map_or("(Not connected)", |p| p.get_name())
     ));
     match readline {
         Ok(line) => {
