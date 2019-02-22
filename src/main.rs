@@ -29,9 +29,20 @@ fn repl(rl: &mut rustyline::Editor<()>, probe: &mut Option<impl DebugProbe>) -> 
         Ok(line) => {
             rl.add_history_entry(line.as_ref());
             match line.split_whitespace().collect::<Vec<&str>>().split_first() {
-                Some((&"connect", rest)) => REPLResult::Connect {
-                    n: rest[0].parse::<u8>().unwrap(),
-                },
+                Some((&"connect", rest)) => {
+                    if rest.len() > 0 {
+                        rest[0].parse::<u8>().ok().map_or_else(
+                            || {
+                                println!("Invalid probe id '{}'", rest[0]);
+                                REPLResult::Continue
+                            },
+                            |n| REPLResult::Connect { n },
+                        )
+                    } else {
+                        println!("Need to supply probe id");
+                        REPLResult::Continue
+                    }
+                }
                 Some((&"disconnect", _)) => REPLResult::Disconnect,
                 Some((&"help", _)) => REPLResult::Help,
                 Some((&"info", _)) => REPLResult::Info,
@@ -70,7 +81,7 @@ fn repl(rl: &mut rustyline::Editor<()>, probe: &mut Option<impl DebugProbe>) -> 
 fn connect(n: u8) -> Option<stlink::STLink> {
     stlink::STLink::new_from_connected(|mut devices| {
         if devices.len() <= n as usize {
-            println!("The device with the given number was not found.");
+            println!("The probe device with the given id '{}' was not found", n);
             Err(libusb::Error::NotFound)
         } else {
             Ok(devices.remove(n as usize).0)
