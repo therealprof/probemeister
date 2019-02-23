@@ -7,8 +7,14 @@ use probe::debug_probe::DebugProbe;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
-enum REPLResult {
+enum REPLDisconnected {
     Connect { n: u8 },
+    Continue,
+    Exit,
+    Help,
+}
+
+enum REPLConnected {
     Continue,
     Disconnect,
     Exit,
@@ -17,7 +23,10 @@ enum REPLResult {
     Reset,
 }
 
-fn repl(rl: &mut rustyline::Editor<()>, probe: &mut Option<impl DebugProbe>) -> REPLResult {
+fn unconnected_repl(
+    rl: &mut rustyline::Editor<()>,
+    probe: &mut Option<impl DebugProbe>,
+) -> REPLDisconnected {
     let context = libusb::Context::new().unwrap();
     let plugged_devices = stlink::get_all_plugged_devices(&context);
 
@@ -34,18 +43,16 @@ fn repl(rl: &mut rustyline::Editor<()>, probe: &mut Option<impl DebugProbe>) -> 
                         rest[0].parse::<u8>().ok().map_or_else(
                             || {
                                 println!("Invalid probe id '{}'", rest[0]);
-                                REPLResult::Continue
+                                REPLDisconnected::Continue
                             },
-                            |n| REPLResult::Connect { n },
+                            |n| REPLDisconnected::Connect { n },
                         )
                     } else {
                         println!("Need to supply probe id");
-                        REPLResult::Continue
+                        REPLDisconnected::Continue
                     }
                 }
-                Some((&"disconnect", _)) => REPLResult::Disconnect,
-                Some((&"help", _)) => REPLResult::Help,
-                Some((&"info", _)) => REPLResult::Info,
+                Some((&"help", _)) => REPLDisconnected::Help,
                 Some((&"list", _)) => match &plugged_devices {
                     Ok(connected_devices) => {
                         println!("The following devices were found:");
@@ -58,22 +65,71 @@ fn repl(rl: &mut rustyline::Editor<()>, probe: &mut Option<impl DebugProbe>) -> 
                                     num, link.1.usb_pid, link.1.version_name
                                 );
                             });
-                        REPLResult::Continue
+                        REPLDisconnected::Continue
                     }
-                    Err(_) => REPLResult::Continue,
+                    Err(_) => REPLDisconnected::Continue,
                 },
-                Some((&"reset", _)) => REPLResult::Reset,
-                Some((&"exit", _)) | Some((&"quit", _)) => REPLResult::Exit,
+                Some((&"exit", _)) | Some((&"quit", _)) => REPLDisconnected::Exit,
                 _ => {
                     println!("Sorry, I don't know what '{}' is, try 'help'?", line);
-                    REPLResult::Continue
+                    REPLDisconnected::Continue
                 }
             }
         }
-        Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => REPLResult::Exit,
+        Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => REPLDisconnected::Exit,
         Err(err) => {
             println!("Error: {:?}", err);
-            REPLResult::Continue
+            REPLDisconnected::Continue
+        }
+    }
+}
+
+fn connected_repl(
+    rl: &mut rustyline::Editor<()>,
+    probe: &mut Option<impl DebugProbe>,
+) -> REPLConnected {
+    let context = libusb::Context::new().unwrap();
+    let plugged_devices = stlink::get_all_plugged_devices(&context);
+
+    let readline = rl.readline(&format!(
+        "{} >> ",
+        probe.as_ref().map_or("(Not connected)", |p| p.get_name())
+    ));
+    match readline {
+        Ok(line) => {
+            rl.add_history_entry(line.as_ref());
+            match line.split_whitespace().collect::<Vec<&str>>().split_first() {
+                Some((&"disconnect", _)) => REPLConnected::Disconnect,
+                Some((&"help", _)) => REPLConnected::Help,
+                Some((&"info", _)) => REPLConnected::Info,
+                Some((&"list", _)) => match &plugged_devices {
+                    Ok(connected_devices) => {
+                        println!("The following devices were found:");
+                        connected_devices
+                            .iter()
+                            .enumerate()
+                            .for_each(|(num, link)| {
+                                println!(
+                                    "[{}]: PID = {}, version = {}",
+                                    num, link.1.usb_pid, link.1.version_name
+                                );
+                            });
+                        REPLConnected::Continue
+                    }
+                    Err(_) => REPLConnected::Continue,
+                },
+                Some((&"reset", _)) => REPLConnected::Reset,
+                Some((&"exit", _)) | Some((&"quit", _)) => REPLConnected::Exit,
+                _ => {
+                    println!("Sorry, I don't know what '{}' is, try 'help'?", line);
+                    REPLConnected::Continue
+                }
+            }
+        }
+        Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => REPLConnected::Exit,
+        Err(err) => {
+            println!("Error: {:?}", err);
+            REPLConnected::Continue
         }
     }
 }
@@ -165,35 +221,43 @@ fn main() {
     rl.load_history("history.txt").ok();
 
     loop {
-        match repl(&mut rl, &mut probe) {
-            REPLResult::Help => {
-                println!("The following commands are available:");
-                println!("\tconnect <n>\t- connect to a debugging probe (STLink only for now)");
-                println!("\tdisconnect\t- disconnect from a debugging probe");
-                println!("\texit\t\t- exit");
-                println!("\tinfo\t\t- show information about connected probe");
-                println!("\tquit\t\t- exit");
-                println!("\treset\t\t- reset the target");
-            }
-            REPLResult::Info => {
-                probe.as_mut().map_or_else(
-                    || println!("Not connected, did you mean to 'connect' first?"),
-                    |mut probe| {
+        match &mut probe {
+            None => match unconnected_repl(&mut rl, &mut probe) {
+                REPLDisconnected::Help => {
+                    println!("The following commands are available:");
+                    println!("\tconnect <n>\t- connect to a debugging probe (STLink only for now)");
+                    println!("\texit\t\t- exit");
+                    println!("\tquit\t\t- exit");
+                }
+                REPLDisconnected::Connect { n } => {
+                    probe = connect(n);
+                }
+                REPLDisconnected::Exit => break,
+                REPLDisconnected::Continue => (),
+            },
+            Some(_) => match connected_repl(&mut rl, &mut probe) {
+                REPLConnected::Help => {
+                    println!("The following commands are available:");
+                    println!("\tdisconnect\t- disconnect from a debugging probe");
+                    println!("\texit\t\t- exit");
+                    println!("\tinfo\t\t- show information about connected probe");
+                    println!("\tquit\t\t- exit");
+                    println!("\treset\t\t- reset the target");
+                }
+                REPLConnected::Info => {
+                    probe.as_mut().map(|mut probe| {
                         show_info(&mut probe).ok();
-                    },
-                );
-            }
-            REPLResult::Disconnect => {
-                probe = None;
-            }
-            REPLResult::Connect { n } => {
-                probe = connect(n);
-            }
-            REPLResult::Reset => {
-                probe.as_mut().map(|mut p| reset(&mut p).ok());
-            }
-            REPLResult::Exit => break,
-            _ => (),
+                    });
+                }
+                REPLConnected::Disconnect => {
+                    probe = None;
+                }
+                REPLConnected::Reset => {
+                    probe.as_mut().map(|mut p| reset(&mut p).ok());
+                }
+                REPLConnected::Exit => break,
+                REPLConnected::Continue => (),
+            },
         }
     }
 
