@@ -1,7 +1,7 @@
 use libusb;
 use stlink;
 
-use coresight::dap_access::DAPAccess;
+use coresight::{dap_access::DAPAccess, memory_interface::MemoryInterface};
 use probe::debug_probe::DebugProbe;
 
 use rustyline::error::ReadlineError;
@@ -17,6 +17,7 @@ enum REPLDisconnected {
 enum REPLConnected {
     Continue,
     Disconnect,
+    Dump { loc: u32, words: u32 },
     Exit,
     Help,
     Info,
@@ -100,6 +101,33 @@ fn connected_repl(
             rl.add_history_entry(line.as_ref());
             match line.split_whitespace().collect::<Vec<&str>>().split_first() {
                 Some((&"disconnect", _)) => REPLConnected::Disconnect,
+                Some((&"dump", rest)) => match rest.len() {
+                    1..=2 => {
+                        let words = if rest.len() == 2 {
+                            rest[1].parse::<u32>().unwrap_or_else(|_| {
+                                println!(
+                                    "Cannot parse '{}' as number of words, will use 1 instead",
+                                    rest[1]
+                                );
+                                1
+                            })
+                        } else {
+                            1
+                        };
+
+                        u32::from_str_radix(rest[0], 16).ok().map_or_else(
+                            || {
+                                println!("Cannot parse '{}' as address", rest[0]);
+                                REPLConnected::Continue
+                            },
+                            |loc| REPLConnected::Dump { loc, words },
+                        )
+                    }
+                    _ => {
+                        println!("Usage: dump <loc> [n]");
+                        REPLConnected::Continue
+                    }
+                },
                 Some((&"help", _)) => REPLConnected::Help,
                 Some((&"info", _)) => REPLConnected::Info,
                 Some((&"list", _)) => match &plugged_devices {
@@ -159,6 +187,32 @@ fn parse_target_id(value: u32) -> (u8, u16, u16, u8) {
         ((value >> 1) & 0x07FF) as u16,
         (value & 0x01) as u8,
     )
+}
+
+fn dump_memory(device: &mut stlink::STLink, loc: u32, words: u32) -> Result<(), &str> {
+    let mem = MemoryInterface::new(0x0);
+    let mut data = vec![0 as u32; words as usize];
+
+    mem.read_block(device, loc, &mut data.as_mut_slice())
+        .or_else(|_| Err("Failed to read block from target"))?;
+
+    for word in 0..words {
+        if word % 4 == 0 {
+            print!("0x{:08x?}: ", loc + 4 * word);
+        }
+
+        print!("{:08x} ", data[word as usize]);
+
+        if word % 4 == 3 {
+            println!("");
+        }
+    }
+
+    if words % 4 != 0 {
+        println!("");
+    }
+
+    Ok(())
 }
 
 fn show_info(device: &mut stlink::STLink) -> Result<(), &str> {
@@ -235,29 +289,39 @@ fn main() {
                 REPLDisconnected::Exit => break,
                 REPLDisconnected::Continue => (),
             },
-            Some(_) => match connected_repl(&mut rl, &mut probe) {
-                REPLConnected::Help => {
-                    println!("The following commands are available:");
-                    println!("\tdisconnect\t- disconnect from a debugging probe");
-                    println!("\texit\t\t- exit");
-                    println!("\tinfo\t\t- show information about connected probe");
-                    println!("\tquit\t\t- exit");
-                    println!("\treset\t\t- reset the target");
+            Some(_) => {
+                match connected_repl(&mut rl, &mut probe) {
+                    REPLConnected::Help => {
+                        println!("The following commands are available:");
+                        println!("\tdisconnect\t- disconnect from a debugging probe");
+                        println!("\tdump <loc> [n]\t- dump n words of data at address loc from the target");
+                        println!("\texit\t\t- exit");
+                        println!("\tinfo\t\t- show information about connected probe");
+                        println!("\tquit\t\t- exit");
+                        println!("\treset\t\t- reset the target");
+                    }
+                    REPLConnected::Info => {
+                        probe.as_mut().map(|mut probe| {
+                            show_info(&mut probe).ok();
+                        });
+                    }
+                    REPLConnected::Dump { loc, words } => {
+                        probe.as_mut().map(|mut probe| {
+                            dump_memory(&mut probe, loc, words)
+                                .map_err(|e| println!("{}", e))
+                                .ok();
+                        });
+                    }
+                    REPLConnected::Disconnect => {
+                        probe = None;
+                    }
+                    REPLConnected::Reset => {
+                        probe.as_mut().map(|mut p| reset(&mut p).ok());
+                    }
+                    REPLConnected::Exit => break,
+                    REPLConnected::Continue => (),
                 }
-                REPLConnected::Info => {
-                    probe.as_mut().map(|mut probe| {
-                        show_info(&mut probe).ok();
-                    });
-                }
-                REPLConnected::Disconnect => {
-                    probe = None;
-                }
-                REPLConnected::Reset => {
-                    probe.as_mut().map(|mut p| reset(&mut p).ok());
-                }
-                REPLConnected::Exit => break,
-                REPLConnected::Continue => (),
-            },
+            }
         }
     }
 
