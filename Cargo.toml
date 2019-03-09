@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 libusb = "0.3.0"
+memory = { path = "../probe-rs/memory" }
 probe = { path = "../probe-rs/probe" }
 stlink = { path = "../probe-rs/probe/stlink" }
 coresight = { path = "../probe-rs/coresight" }

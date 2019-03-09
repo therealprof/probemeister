@@ -1,7 +1,8 @@
 use libusb;
 use stlink;
 
-use coresight::{dap_access::DAPAccess, memory_interface::MemoryInterface};
+use coresight::dap_access::DAPAccess;
+use memory::MI;
 use probe::debug_probe::DebugProbe;
 
 use rustyline::error::ReadlineError;
@@ -40,7 +41,7 @@ fn unconnected_repl(
             rl.add_history_entry(line.as_ref());
             match line.split_whitespace().collect::<Vec<&str>>().split_first() {
                 Some((&"connect", rest)) => {
-                    if rest.len() > 0 {
+                    if !rest.is_empty() {
                         rest[0].parse::<u8>().ok().map_or_else(
                             || {
                                 println!("Invalid probe id '{}'", rest[0]);
@@ -190,10 +191,10 @@ fn parse_target_id(value: u32) -> (u8, u16, u16, u8) {
 }
 
 fn dump_memory(device: &mut stlink::STLink, loc: u32, words: u32) -> Result<(), &str> {
-    let mem = MemoryInterface::new(0x0);
     let mut data = vec![0 as u32; words as usize];
 
-    mem.read_block(device, loc, &mut data.as_mut_slice())
+    device
+        .read_block(loc, &mut data.as_mut_slice())
         .or_else(|_| Err("Failed to read block from target"))?;
 
     for word in 0..words {
@@ -204,12 +205,12 @@ fn dump_memory(device: &mut stlink::STLink, loc: u32, words: u32) -> Result<(), 
         print!("{:08x} ", data[word as usize]);
 
         if word % 4 == 3 {
-            println!("");
+            println!();
         }
     }
 
     if words % 4 != 0 {
-        println!("");
+        println!();
     }
 
     Ok(())
@@ -301,16 +302,16 @@ fn main() {
                         println!("\treset\t\t- reset the target");
                     }
                     REPLConnected::Info => {
-                        probe.as_mut().map(|mut probe| {
+                        if let Some(mut probe) = probe.as_mut() {
                             show_info(&mut probe).ok();
-                        });
+                        }
                     }
                     REPLConnected::Dump { loc, words } => {
-                        probe.as_mut().map(|mut probe| {
+                        if let Some(mut probe) = probe.as_mut() {
                             dump_memory(&mut probe, loc, words)
                                 .map_err(|e| println!("{}", e))
                                 .ok();
-                        });
+                        }
                     }
                     REPLConnected::Disconnect => {
                         probe = None;
