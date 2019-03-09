@@ -303,19 +303,15 @@ fn main() {
                         show_info(probe).ok();
                     }
                     REPLConnected::Dump { loc, words } => {
-                        if let Probe::STLink { ref mut probe } = &mut connected {
-                            dump_memory(probe, loc, words)
-                                .map_err(|e| println!("{}", e))
-                                .ok();
-                        }
+                        dump_memory(probe, loc, words)
+                            .map_err(|e| println!("{}", e))
+                            .ok();
                     }
                     REPLConnected::Disconnect => {
                         connected = Probe::NoProbe;
                     }
                     REPLConnected::Reset => {
-                        if let Probe::STLink { ref mut probe } = connected {
-                            reset(probe).ok();
-                        }
+                        reset(probe).ok();
                     }
                     REPLConnected::Exit => break,
                     REPLConnected::Continue => (),
