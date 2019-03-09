@@ -31,6 +31,15 @@ enum Probe {
     STLink { probe: stlink::STLink },
 }
 
+impl Probe {
+    fn get_name(&self) -> &str {
+        match self {
+            Probe::NoProbe => "(no probe)",
+            Probe::STLink { probe } => probe.get_name(),
+        }
+    }
+}
+
 fn unconnected_repl(rl: &mut rustyline::Editor<()>, prompt: &str) -> REPLDisconnected {
     match rl.readline(prompt) {
         Ok(line) => {
@@ -248,8 +257,9 @@ fn main() {
     rl.load_history("history.txt").ok();
 
     loop {
+        let prompt = format!("{} >> ", connected.get_name());
         match connected {
-            Probe::NoProbe => match unconnected_repl(&mut rl, "(Not connected) >> ") {
+            Probe::NoProbe => match unconnected_repl(&mut rl, &prompt) {
                 REPLDisconnected::Help => {
                     println!("The following commands are available:");
                     println!("\tconnect <n>\t- connect to a debugging probe (STLink only for now)");
@@ -264,8 +274,6 @@ fn main() {
                 REPLDisconnected::List => list_probes(),
             },
             Probe::STLink { ref mut probe } => {
-                let prompt = format!("{} >> ", probe.get_name(),);
-
                 match connected_repl(&mut rl, &prompt) {
                     REPLConnected::Help => {
                         println!("The following commands are available:");
