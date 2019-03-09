@@ -190,7 +190,7 @@ fn parse_target_id(value: u32) -> (u8, u16, u16, u8) {
     )
 }
 
-fn dump_memory(device: &mut stlink::STLink, loc: u32, words: u32) -> Result<(), &str> {
+fn dump_memory<D: DebugProbe + MI>(device: &mut D, loc: u32, words: u32) -> Result<(), &str> {
     let mut data = vec![0 as u32; words as usize];
 
     device
@@ -216,7 +216,7 @@ fn dump_memory(device: &mut stlink::STLink, loc: u32, words: u32) -> Result<(), 
     Ok(())
 }
 
-fn show_info(device: &mut stlink::STLink) -> Result<(), &str> {
+fn show_info<D: DebugProbe + DAPAccess>(device: &mut D) -> Result<(), &str> {
     let version = device
         .get_version()
         .or_else(|_| Err("Could not get version"))?;
@@ -262,7 +262,7 @@ fn show_info(device: &mut stlink::STLink) -> Result<(), &str> {
     Ok(())
 }
 
-fn reset(device: &mut stlink::STLink) -> Result<(), &str> {
+fn reset<D: DebugProbe>(device: &mut D) -> Result<(), &str> {
     device.target_reset().ok();
     Ok(())
 }
@@ -302,13 +302,13 @@ fn main() {
                         println!("\treset\t\t- reset the target");
                     }
                     REPLConnected::Info => {
-                        if let Some(mut probe) = probe.as_mut() {
-                            show_info(&mut probe).ok();
+                        if let Some(probe) = probe.as_mut() {
+                            show_info(probe).ok();
                         }
                     }
                     REPLConnected::Dump { loc, words } => {
-                        if let Some(mut probe) = probe.as_mut() {
-                            dump_memory(&mut probe, loc, words)
+                        if let Some(probe) = probe.as_mut() {
+                            dump_memory(probe, loc, words)
                                 .map_err(|e| println!("{}", e))
                                 .ok();
                         }
@@ -317,7 +317,9 @@ fn main() {
                         probe = None;
                     }
                     REPLConnected::Reset => {
-                        probe.as_mut().map(|mut p| reset(&mut p).ok());
+                        if let Some(probe) = probe.as_mut() {
+                            reset(probe).ok();
+                        }
                     }
                     REPLConnected::Exit => break,
                     REPLConnected::Continue => (),
