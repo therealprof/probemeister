@@ -13,6 +13,7 @@ enum REPLDisconnected {
     Continue,
     Exit,
     Help,
+    List,
 }
 
 enum REPLConnected {
@@ -31,11 +32,7 @@ enum Probe {
 }
 
 fn unconnected_repl(rl: &mut rustyline::Editor<()>, prompt: &str) -> REPLDisconnected {
-    let context = libusb::Context::new().unwrap();
-    let plugged_devices = stlink::get_all_plugged_devices(&context);
-
-    let readline = rl.readline(prompt);
-    match readline {
+    match rl.readline(prompt) {
         Ok(line) => {
             rl.add_history_entry(line.as_ref());
             match line.split_whitespace().collect::<Vec<&str>>().split_first() {
@@ -54,22 +51,7 @@ fn unconnected_repl(rl: &mut rustyline::Editor<()>, prompt: &str) -> REPLDisconn
                     }
                 }
                 Some((&"help", _)) => REPLDisconnected::Help,
-                Some((&"list", _)) => match &plugged_devices {
-                    Ok(connected_devices) => {
-                        println!("The following devices were found:");
-                        connected_devices
-                            .iter()
-                            .enumerate()
-                            .for_each(|(num, link)| {
-                                println!(
-                                    "[{}]: PID = {}, version = {}",
-                                    num, link.1.usb_pid, link.1.version_name
-                                );
-                            });
-                        REPLDisconnected::Continue
-                    }
-                    Err(_) => REPLDisconnected::Continue,
-                },
+                Some((&"list", _)) => REPLDisconnected::List,
                 Some((&"exit", _)) | Some((&"quit", _)) => REPLDisconnected::Exit,
                 _ => {
                     println!("Sorry, I don't know what '{}' is, try 'help'?", line);
@@ -86,12 +68,7 @@ fn unconnected_repl(rl: &mut rustyline::Editor<()>, prompt: &str) -> REPLDisconn
 }
 
 fn connected_repl(rl: &mut rustyline::Editor<()>, prompt: &str) -> REPLConnected {
-    let context = libusb::Context::new().unwrap();
-    let plugged_devices = stlink::get_all_plugged_devices(&context);
-
-    let readline = rl.readline(prompt);
-
-    match readline {
+    match rl.readline(prompt) {
         Ok(line) => {
             rl.add_history_entry(line.as_ref());
             match line.split_whitespace().collect::<Vec<&str>>().split_first() {
@@ -125,22 +102,6 @@ fn connected_repl(rl: &mut rustyline::Editor<()>, prompt: &str) -> REPLConnected
                 },
                 Some((&"help", _)) => REPLConnected::Help,
                 Some((&"info", _)) => REPLConnected::Info,
-                Some((&"list", _)) => match &plugged_devices {
-                    Ok(connected_devices) => {
-                        println!("The following devices were found:");
-                        connected_devices
-                            .iter()
-                            .enumerate()
-                            .for_each(|(num, link)| {
-                                println!(
-                                    "[{}]: PID = {}, version = {}",
-                                    num, link.1.usb_pid, link.1.version_name
-                                );
-                            });
-                        REPLConnected::Continue
-                    }
-                    Err(_) => REPLConnected::Continue,
-                },
                 Some((&"reset", _)) => REPLConnected::Reset,
                 Some((&"exit", _)) | Some((&"quit", _)) => REPLConnected::Exit,
                 _ => {
@@ -210,6 +171,21 @@ fn dump_memory<D: DebugProbe + MI>(device: &mut D, loc: u32, words: u32) -> Resu
     }
 
     Ok(())
+}
+
+fn list_probes() {
+    let context = libusb::Context::new().unwrap();
+    let plugged_devices = stlink::get_all_plugged_devices(&context);
+
+    println!("The following ST-Link devices were found:");
+    if let Ok(devices) = plugged_devices {
+        devices.iter().enumerate().for_each(|(num, link)| {
+            println!(
+                "[{}]: PID = {}, version = {}",
+                num, link.1.usb_pid, link.1.version_name
+            );
+        });
+    }
 }
 
 fn show_info<D: DebugProbe + DAPAccess>(device: &mut D) -> Result<(), &str> {
@@ -285,6 +261,7 @@ fn main() {
                 }
                 REPLDisconnected::Exit => break,
                 REPLDisconnected::Continue => (),
+                REPLDisconnected::List => list_probes(),
             },
             Probe::STLink { ref mut probe } => {
                 let prompt = format!("{} >> ", probe.get_name(),);
