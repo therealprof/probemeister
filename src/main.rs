@@ -25,17 +25,16 @@ enum REPLConnected {
     Reset,
 }
 
-fn unconnected_repl(
-    rl: &mut rustyline::Editor<()>,
-    probe: &mut Option<impl DebugProbe>,
-) -> REPLDisconnected {
+enum Probe {
+    NoProbe,
+    STLink { probe: stlink::STLink },
+}
+
+fn unconnected_repl(rl: &mut rustyline::Editor<()>, prompt: &str) -> REPLDisconnected {
     let context = libusb::Context::new().unwrap();
     let plugged_devices = stlink::get_all_plugged_devices(&context);
 
-    let readline = rl.readline(&format!(
-        "{} >> ",
-        probe.as_ref().map_or("(Not connected)", |p| p.get_name())
-    ));
+    let readline = rl.readline(prompt);
     match readline {
         Ok(line) => {
             rl.add_history_entry(line.as_ref());
@@ -86,17 +85,12 @@ fn unconnected_repl(
     }
 }
 
-fn connected_repl(
-    rl: &mut rustyline::Editor<()>,
-    probe: &mut Option<impl DebugProbe>,
-) -> REPLConnected {
+fn connected_repl(rl: &mut rustyline::Editor<()>, prompt: &str) -> REPLConnected {
     let context = libusb::Context::new().unwrap();
     let plugged_devices = stlink::get_all_plugged_devices(&context);
 
-    let readline = rl.readline(&format!(
-        "{} >> ",
-        probe.as_ref().map_or("(Not connected)", |p| p.get_name())
-    ));
+    let readline = rl.readline(prompt);
+
     match readline {
         Ok(line) => {
             rl.add_history_entry(line.as_ref());
@@ -163,8 +157,8 @@ fn connected_repl(
     }
 }
 
-fn connect(n: u8) -> Option<stlink::STLink> {
-    stlink::STLink::new_from_connected(|mut devices| {
+fn connect(n: u8) -> Probe {
+    let probe = stlink::STLink::new_from_connected(|mut devices| {
         if devices.len() <= n as usize {
             println!("The probe device with the given id '{}' was not found", n);
             Err(libusb::Error::NotFound)
@@ -176,7 +170,9 @@ fn connect(n: u8) -> Option<stlink::STLink> {
         device.attach(probe::protocol::WireProtocol::Swd).ok();
         device
     })
-    .ok()
+    .unwrap();
+
+    Probe::STLink { probe }
 }
 
 // revision | partno | designer | reserved
@@ -268,7 +264,7 @@ fn reset<D: DebugProbe>(device: &mut D) -> Result<(), &str> {
 }
 
 fn main() {
-    let mut probe: Option<stlink::STLink> = None;
+    let mut connected: Probe = Probe::NoProbe;
     let mut rl = Editor::<()>::new();
 
     println!("Probemeister at your service!");
@@ -276,8 +272,8 @@ fn main() {
     rl.load_history("history.txt").ok();
 
     loop {
-        match &mut probe {
-            None => match unconnected_repl(&mut rl, &mut probe) {
+        match connected {
+            Probe::NoProbe => match unconnected_repl(&mut rl, "(Not connected) >> ") {
                 REPLDisconnected::Help => {
                     println!("The following commands are available:");
                     println!("\tconnect <n>\t- connect to a debugging probe (STLink only for now)");
@@ -285,13 +281,15 @@ fn main() {
                     println!("\tquit\t\t- exit");
                 }
                 REPLDisconnected::Connect { n } => {
-                    probe = connect(n);
+                    connected = connect(n);
                 }
                 REPLDisconnected::Exit => break,
                 REPLDisconnected::Continue => (),
             },
-            Some(_) => {
-                match connected_repl(&mut rl, &mut probe) {
+            Probe::STLink { ref mut probe } => {
+                let prompt = format!("{} >> ", probe.get_name(),);
+
+                match connected_repl(&mut rl, &prompt) {
                     REPLConnected::Help => {
                         println!("The following commands are available:");
                         println!("\tdisconnect\t- disconnect from a debugging probe");
@@ -302,22 +300,20 @@ fn main() {
                         println!("\treset\t\t- reset the target");
                     }
                     REPLConnected::Info => {
-                        if let Some(probe) = probe.as_mut() {
-                            show_info(probe).ok();
-                        }
+                        show_info(probe).ok();
                     }
                     REPLConnected::Dump { loc, words } => {
-                        if let Some(probe) = probe.as_mut() {
+                        if let Probe::STLink { ref mut probe } = &mut connected {
                             dump_memory(probe, loc, words)
                                 .map_err(|e| println!("{}", e))
                                 .ok();
                         }
                     }
                     REPLConnected::Disconnect => {
-                        probe = None;
+                        connected = Probe::NoProbe;
                     }
                     REPLConnected::Reset => {
-                        if let Some(probe) = probe.as_mut() {
+                        if let Probe::STLink { ref mut probe } = connected {
                             reset(probe).ok();
                         }
                     }
